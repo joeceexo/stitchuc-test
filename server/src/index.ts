@@ -64,6 +64,23 @@ const pick = (n: number) => Array.from({ length: n }, () => CODE_LETTERS[randomI
 const newCode = () => `NT-${pick(3)}-${pick(3)}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** True for addresses that never belong to a visitor: private, loopback, link-local, carrier NAT. */
+const internal = (ip: string) =>
+  /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip) ||
+  /^(::1$|f[cd]|fe80:)/i.test(ip) || ip === '';
+/**
+ * The visitor's address. Fastify's own answer when it is a public one; otherwise the last public
+ * address the proxies in front wrote down (EasyPanel's proxy can sit behind Docker's own network).
+ */
+function clientIp(req: FastifyRequest): string {
+  const direct = req.ip.replace(/^::ffff:/, '');
+  if (!internal(direct) || config.trustProxy === 0) return direct;
+  const chain = [String(req.headers['x-forwarded-for'] ?? ''), String(req.headers['x-real-ip'] ?? '')]
+    .join(',').split(',').map((x) => x.trim().replace(/^::ffff:/, '')).filter(Boolean);
+  for (let i = chain.length - 1; i >= 0; i--) if (!internal(chain[i]!)) return chain[i]!;
+  return direct;
+}
+
 // ---- Staff sign-in ---------------------------------------------------------
 
 const sign = (v: string) => createHmac('sha256', config.sessionSecret).update(v).digest('hex');
@@ -117,7 +134,7 @@ app.get('/api/config', async (req) => {
 });
 
 app.post('/api/tests', async (req, reply) => {
-  if (!testLimit(req.ip)) {
+  if (!testLimit(clientIp(req))) {
     return reply.code(429).send({ error: 'This connection has run a lot of tests in the last hour. Please try again a little later.' });
   }
   const body = (req.body ?? {}) as { link?: string; nearest?: string };
@@ -126,9 +143,10 @@ app.post('/api/tests', async (req, reply) => {
     const r = await pool.query('select id, company, office from links where slug = $1', [String(body.link).slice(0, 80)]);
     link = r.rows[0] ?? null;
   }
+  const ip = clientIp(req);
   const id = randomUUID();
   const token = randomBytes(24).toString('hex');
-  const geo = lookup(req.ip);
+  const geo = lookup(ip);
   let code = newCode();
   for (let i = 0; i < 5; i++) {
     try {
@@ -136,7 +154,7 @@ app.post('/api/tests', async (req, reply) => {
         `insert into tests (id, code, token_hash, link_id, company, office, origin, ip, asn, provider, place, ua)
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [id, code, sha(token), link?.id ?? null, link?.company ?? null, link?.office ?? null, link ? 'Support link' : 'Self-serve',
-          req.ip, geo.asn, geo.provider, geo.place, String(req.headers['user-agent'] ?? '').slice(0, 400)],
+          ip, geo.asn, geo.provider, geo.place, String(req.headers['user-agent'] ?? '').slice(0, 400)],
       );
       break;
     } catch (e: any) {
@@ -144,6 +162,7 @@ app.post('/api/tests', async (req, reply) => {
       throw e;
     }
   }
+  req.log.info({ code, direct: req.ip, forwarded: req.headers['x-forwarded-for'] ? 'yes' : 'no', hops: String(req.headers['x-forwarded-for'] ?? '').split(',').length, publicIp: !internal(ip) }, 'test started');
   live.set(id, { tokenHash: sha(token), until: Date.now() + 10 * 60_000, speedUntil: 0 });
   const nearest = typeof body.nearest === 'string' ? body.nearest.slice(0, 40) : null;
   const call = await makePass(id, nearest).catch((e) => { req.log.warn({ err: e }, 'could not make a test call pass'); return null; });
@@ -265,7 +284,7 @@ app.post('/api/results/:code/email', async (req, reply) => {
   const { code } = req.params as { code: string };
   const email = String((req.body as any)?.email ?? '').trim().slice(0, 200);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return reply.code(400).send({ error: 'That email address does not look right.' });
-  if (!emailLimit(req.ip)) return reply.code(429).send({ error: 'Too many emails from this connection. Try again in an hour.' });
+  if (!emailLimit(clientIp(req))) return reply.code(429).send({ error: 'Too many emails from this connection. Try again in an hour.' });
   const r = await pool.query(`select result from tests where code = $1 and status = 'done'`, [code.toUpperCase().slice(0, 20)]);
   if (!r.rows[0]) return reply.code(404).send({ error: 'No result with that code.' });
   try { await sendCopy(email, r.rows[0].result as Result); }
@@ -277,7 +296,7 @@ app.post('/api/results/:code/email', async (req, reply) => {
 
 app.post('/api/staff/login', async (req, reply) => {
   if (!config.staffPassword) return reply.code(404).send({ error: 'The staff view is not set up.' });
-  if (!loginLimit(req.ip)) return reply.code(429).send({ error: 'Too many tries. Wait an hour.' });
+  if (!loginLimit(clientIp(req))) return reply.code(429).send({ error: 'Too many tries. Wait an hour.' });
   const given = Buffer.from(sha(String((req.body as any)?.password ?? '')));
   const want = Buffer.from(sha(config.staffPassword));
   if (!timingSafeEqual(given, want)) return reply.code(401).send({ error: 'That password is not right.' });
