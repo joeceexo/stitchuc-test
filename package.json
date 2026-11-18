@@ -1,0 +1,43 @@
+{
+  "name": "stitchuc-test",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Stitch Network Test: tells a customer whether their internet can carry Stitch calls.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev:server": "tsx watch server/src/index.ts",
+    "dev:web": "vite",
+    "build": "vite build && tsc -p server/tsconfig.json",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "test": "tsx --test server/src/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.11",
+    "@fastify/websocket": "^11.3.7",
+    "@fontsource-variable/archivo": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "fastify": "^5.12.8",
+    "livekit-client": "^2.24.1",
+    "livekit-server-sdk": "^2.20.0",
+    "maxmind": "^5.1.0",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^6.3.0",
+    "playwright-core": "^1.65.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}
